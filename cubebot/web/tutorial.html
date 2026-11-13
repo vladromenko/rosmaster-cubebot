@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rosmaster: рука и одометрия</title>
+<style>
+:root{--bg:#fff;--fg:#1c2330;--mut:#667;--card:#f3f5f9;--ac:#2563eb;--ac2:#e11d48;--ok:#16a34a}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1116;--fg:#e6e9ef;--mut:#9aa4b2;--card:#171c24;--ac:#60a5fa;--ac2:#fb7185;--ok:#4ade80}}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif;max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:26px}h2{margin-top:36px;border-top:1px solid var(--card);padding-top:18px}
+.card{background:var(--card);border-radius:10px;padding:12px 14px;margin:12px 0}
+.f{font-family:ui-monospace,Menlo,monospace;background:var(--card);padding:8px 12px;border-radius:8px;display:block;margin:8px 0;overflow-x:auto;white-space:pre}
+canvas{width:100%;background:var(--card);border-radius:10px;display:block}
+label{display:block;font-size:14px;color:var(--mut);margin:4px 0}
+input[type=range]{width:100%}
+b.v{color:var(--ac);font-variant-numeric:tabular-nums}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+@media(max-width:600px){.row{grid-template-columns:1fr}}
+</style></head><body>
+<h1>Rosmaster M3 Pro: как работают рука и одометрия</h1>
+<p>Все слайдеры живые. Числа руки взяты из кода (<code>arm_model.py</code>); параметры колёс ниже — типичные, их можно подогнать под ваш робот.</p>
+
+<h2>0. Живые данные с робота</h2>
+<div class="card"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="live"> следовать за настоящим роботом (слайдеры руки = измеренные углы серво)</label>
+<div id="liveout" style="margin-top:6px">выключено</div><canvas id="trail" height="220"></canvas></div>
+<h2>1. Сервоприводы → углы суставов</h2>
+<p>Контроллер шлёт в шину «серво-градусы» 0…180 (у кисти и захвата другие диапазоны). Код переводит их в математические углы так:</p>
+<span class="f">q1 = −(s1 − 90)°   q2..q5 = (s − 90)°   q6 = s6
+s = 90 → сустав в «нуле» (рука стоит вертикально)</span>
+<p>Сырые значения серво (калибровка в <code>controller-calibration.json</code>) связаны линейно: <code>raw = raw₀ + k·s</code>. Прошивка отдаёт измеренные углы обратно (<code>/arm6_feedback</code>) — по ним мы стартуем из реальной позы.</p>
+
+<h2>2. Прямая кинематика (FK) руки</h2>
+<p>Плечо стоит в точке (x₀, z₀) = (0.0336, 0.218) м над центром базы. Звенья: L₂ = L₃ = 0.08285 м, кисть+захват L₄ = 0.1598 м. Рука работает в плоскости, углы суммируются:</p>
+<span class="f">θ₂ = −q₂,  θ₃ = θ₂ − q₃,  θ₄ = θ₃ − q₄     (знаки подобраны сверкой с кодом)
+x = x₀ + L₂ sin θ₂ + L₃ sin θ₃ + L₄ sin θ₄
+z = z₀ + L₂ cos θ₂ + L₃ cos θ₃ + L₄ cos θ₄</span>
+<canvas id="arm" height="320"></canvas>
+<div class="row">
+<label>серво 2 <b class="v" id="a2v"></b><input id="a2" type="range" min="30" max="150" value="110"></label>
+<label>серво 3 <b class="v" id="a3v"></b><input id="a3" type="range" min="0" max="180" value="40"></label>
+<label>серво 4 <b class="v" id="a4v"></b><input id="a4" type="range" min="0" max="180" value="60"></label>
+<label>цель IK: x <b class="v" id="txv"></b><input id="tx" type="range" min="10" max="35" value="22"></label>
+</div>
+<div class="card" id="armout"></div>
+
+<h2>3. Обратная кинематика (IK) и гладкое движение</h2>
+<p>Захват должен прийти в точку (x, z) с заданным наклоном φ. Сначала находим положение запястья, потом решаем двузвенник по теореме косинусов:</p>
+<span class="f">w = (x − L₄ sin φ, z − L₄ cos φ) − (x₀, z₀),  d = |w|
+cos β = (d² − L₂² − L₃²) / (2 L₂ L₃)     (нужно |cos β| ≤ 1, иначе точка недостижима)
+θ₂ = atan2(wx, wz) − atan2(L₃ sin β, L₂ + L₃ cos β),  θ₃ = θ₂ + β</span>
+<p>Слайдер «цель IK: x» выше двигает цель на высоте стола и рисует красным решение. Чтобы рука шла плавно, а не рывком, угол ведётся по профилю «минимального рывка»:</p>
+<span class="f">s(τ) = 10τ³ − 15τ⁴ + 6τ⁵,  τ = t/T      (скорость и ускорение в концах = 0)</span>
+<canvas id="prof" height="180"></canvas>
+<p>Визуальное наведение: камера на руке видит куб, по глубине считается его положение в кадре, и рука подходит ступеньками по высоте h = 0.16 → 0.10 → 0.05 → 0 м, каждый раз перемеряя ошибку.</p>
+
+<h2>4. Меканум-колёса: из скоростей колёс в движение</h2>
+<p>Четыре колеса с роликами под 45°. Для радиуса r и K = lₓ + l_y (полуширина + полудлина базы):</p>
+<span class="f">vx =  r/4 (ω₁ + ω₂ + ω₃ + ω₄)
+vy =  r/4 (−ω₁ + ω₂ + ω₃ − ω₄)
+wz =  r/(4K) (−ω₁ + ω₂ − ω₃ + ω₄)       (1=пер.лев, 2=пер.прав, 3=зад.лев, 4=зад.прав)</span>
+<canvas id="mec" height="260"></canvas>
+<div class="row">
+<label>ω₁ <b class="v" id="w1v"></b><input id="w1" type="range" min="-10" max="10" step="0.5" value="5"></label>
+<label>ω₂ <b class="v" id="w2v"></b><input id="w2" type="range" min="-10" max="10" step="0.5" value="5"></label>
+<label>ω₃ <b class="v" id="w3v"></b><input id="w3" type="range" min="-10" max="10" step="0.5" value="5"></label>
+<label>ω₄ <b class="v" id="w4v"></b><input id="w4" type="range" min="-10" max="10" step="0.5" value="5"></label>
+<label>радиус колеса r, мм <b class="v" id="rv"></b><input id="r" type="range" min="30" max="50" value="37"></label>
+<label>K = lₓ+l_y, мм <b class="v" id="kv"></b><input id="k" type="range" min="120" max="220" value="170"></label>
+</div>
+<div class="card" id="mecout"></div>
+
+<h2>5. Одометрия: колёса + гироскоп + лидар</h2>
+<p>Поза интегрируется из скоростей в мировой системе:</p>
+<span class="f">x += (vx cos ψ − vy sin ψ) dt,  y += (vx sin ψ + vy cos ψ) dt,  ψ += wz dt</span>
+<p>Колёса проскальзывают (особенно меканум), особенно по углу. Поэтому угол берём из гироскопа, а накопившийся дрейф и позицию подправляет сопоставление лидарных сканов (ICP, <code>scan_matching.py</code>). Идея фильтра — комплементарная:</p>
+<span class="f">ψ_fused = α (ψ_fused + ω_gyro dt) + (1 − α) ψ_wheels,  α → 1 на коротком масштабе</span>
+<p>Ниже робот едет по квадрату 1×1 м. Красная — только колёса (с ошибкой масштаба и проскальзыванием в поворотах), зелёная — с гироскопом.</p>
+<canvas id="odo" height="300"></canvas>
+<div class="row">
+<label>проскальзывание колёс в повороте, % <b class="v" id="slv"></b><input id="sl" type="range" min="0" max="15" value="6"></label>
+<label>ошибка масштаба колёс, % <b class="v" id="scv"></b><input id="sc" type="range" min="-5" max="5" value="2"></label>
+</div>
+
+<h2>6. Заряд батареи</h2>
+<p>Тока нет, поэтому SoC считается по напряжению 3S с поправкой на нагрузку: <code>V_ocv = V_meas + R·I_est</code>, затем кривая 3.0…4.2 В на ячейку (≈9.0…12.6 В). Защиты на плате нет; программа лишь прерывает миссию ниже порога <code>min_battery_v</code>.</p>
+
+<script>
+const $=id=>document.getElementById(id), D=Math.PI/180;
+function cv(id){const c=$(id),r=devicePixelRatio||1;c.width=c.clientWidth*r;c.height=c.getAttribute('height')*r;const g=c.getContext('2d');g.scale(r,r);return [g,c.clientWidth,+c.getAttribute('height')]}
+const css=n=>getComputedStyle(document.body).getPropertyValue(n)||'#888';
+function tick(i,u,f){const e=$(i);e.oninput=()=>{$(i+'v').textContent=e.value+u;f()};$(i+'v').textContent=e.value+u}
+const X0=0.0336,Z0=0.218,L2=0.08285,L3=0.08285,L4=0.1598;
+function fk(s2,s3,s4){const q=[s2,s3,s4].map(s=>(s-90)*D);const t2=-q[0],t3=t2-q[1],t4=t3-q[2];
+ const p=[[X0,Z0]];let x=X0,z=Z0;[[L2,t2],[L3,t3],[L4,t4]].forEach(([l,t])=>{x+=l*Math.sin(t);z+=l*Math.cos(t);p.push([x,z])});return {p,t4}}
+function ik(x,z,phi){const wx=x-L4*Math.sin(phi)-X0,wz=z-L4*Math.cos(phi)-Z0,d2=wx*wx+wz*wz;
+ const cb=(d2-L2*L2-L3*L3)/(2*L2*L3);if(Math.abs(cb)>1)return null;const b=Math.acos(cb);
+ const t2=Math.atan2(wx,wz)-Math.atan2(L3*Math.sin(b),L2+L3*Math.cos(b));const t3=t2+b;
+ return [[X0,Z0],[X0+L2*Math.sin(t2),Z0+L2*Math.cos(t2)],[X0+L2*Math.sin(t2)+L3*Math.sin(t3),Z0+L2*Math.cos(t2)+L3*Math.cos(t3)],[x,z]]}
+function drawArm(){const [g,w,h]=cv('arm');const S=Math.min(w/0.7,h/0.6),ox=w*0.15,oy=h-20;
+ const P=([x,z])=>[ox+x*S,oy-z*S];g.strokeStyle='#888';g.beginPath();g.moveTo(0,oy);g.lineTo(w,oy);g.stroke();
+ g.fillStyle='#8884';g.fillRect(...P([-0.125,0.0]),0.145*S+0.125*S,0.0);g.fillRect(ox-0.125*S,oy-0.06*S,0.25*S,0.06*S);
+ const a=+$('a2').value,b=+$('a3').value,c=+$('a4').value,f=fk(a,b,c);
+ g.lineWidth=5;g.lineCap='round';g.strokeStyle=css('--ac');g.beginPath();f.p.forEach((p,i)=>{const q=P(p);i?g.lineTo(...q):g.moveTo(...q)});g.stroke();
+ const tx=$('tx').value/100,sol=ik(tx,0.02,Math.PI*0.5*0+ -90*D*-1*0+Math.PI);
+ let txt='TCP: x = '+(f.p[3][0]*100).toFixed(1)+' см, z = '+(f.p[3][1]*100).toFixed(1)+' см, наклон кисти θ₄ = '+(f.t4/D).toFixed(0)+'°.';
+ const sol2=ik(tx,0.02+L4*0,Math.PI);
+ if(sol2){g.strokeStyle=css('--ac2');g.lineWidth=3;g.beginPath();sol2.forEach((p,i)=>{const q=P(p);i?g.lineTo(...q):g.moveTo(...q)});g.stroke();
+  g.fillStyle=css('--ac2');g.beginPath();g.arc(...P(sol2[3]),6,0,7);g.fill();
+  txt+=' IK до точки (x='+(tx*100).toFixed(0)+' см, пол) с захватом вниз: достижимо.'}else txt+=' IK: точка (x='+(tx*100).toFixed(0)+' см) недостижима — |cos β| > 1.';
+ $('armout').textContent=txt}
+['a2','a3','a4'].forEach(i=>tick(i,'°',drawArm));tick('tx',' см',drawArm);drawArm();
+
+function drawProf(){const [g,w,h]=cv('prof');g.strokeStyle=css('--ac');g.lineWidth=3;g.beginPath();
+ for(let i=0;i<=100;i++){const t=i/100,s=10*t**3-15*t**4+6*t**5,x=20+t*(w-40),y=h-20-s*(h-40);i?g.lineTo(x,y):g.moveTo(x,y)}g.stroke();
+ g.strokeStyle=css('--ac2');g.lineWidth=1.5;g.beginPath();for(let i=0;i<=100;i++){const t=i/100,x=20+t*(w-40),y=h-20-t*(h-40);i?g.lineTo(x,y):g.moveTo(x,y)}g.stroke();
+ g.fillStyle='#888';g.fillText('синий: минимальный рывок; красный: линейный (рывок на концах)',24,16)}
+drawProf();
+
+function mec(){const w=[1,2,3,4].map(i=>+$('w'+i).value),r=$('r').value/1000,K=$('k').value/1000;
+ const vx=r/4*(w[0]+w[1]+w[2]+w[3]),vy=r/4*(-w[0]+w[1]+w[2]-w[3]),wz=r/(4*K)*(-w[0]+w[1]-w[2]+w[3]);
+ $('mecout').textContent='vx = '+vx.toFixed(3)+' м/с, vy = '+vy.toFixed(3)+' м/с, wz = '+wz.toFixed(2)+' рад/с';
+ const [g,W,H]=cv('mec'),cx=W/2,cy=H/2;g.fillStyle='#8886';g.fillRect(cx-50,cy-70,100,140);
+ [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sy],i)=>{g.fillStyle=w[i]>=0?css('--ok'):css('--ac2');const hh=Math.abs(w[i])*5;
+  g.fillRect(cx+sx*62-8,cy+sy*45-(w[i]>=0?hh:0),16,hh||1)});
+ g.strokeStyle=css('--ac');g.fillStyle=css('--ac');g.lineWidth=4;const k=300;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+vy*-k*0+vy*k*-1,cy-vx*k);g.stroke();
+ g.beginPath();g.arc(cx,cy,30,0,Math.min(Math.max(wz,-1),1)*Math.PI,wz<0);g.stroke()}
+['w1','w2','w3','w4'].forEach(i=>tick(i,'',mec));tick('r',' мм',mec);tick('k',' мм',mec);mec();
+
+function odo(){const sl=$('sl').value/100,sc=1+$('sc').value/100,[g,W,H]=cv('odo'),S=Math.min(W,H)*0.6,ox=W/2-S/2,oy=H-30;
+ const run=(wheel)=>{let x=0,y=0,p=0,pts=[[0,0]];const dt=0.01;
+  for(let leg=0;leg<4;leg++){for(let i=0;i<100;i++){const v=sc;x+=v*Math.cos(p)*dt;y+=v*Math.sin(p)*dt;pts.push([x,y])}
+   const turn=(Math.PI/2)*(wheel?(1-sl):1.0);p+=turn;if(!wheel)p+=0.002*(leg+1)}return pts};
+ const T=pts=>pts.map(([x,y])=>[ox+x*S,oy-y*S]);
+ g.strokeStyle='#888';g.setLineDash([4,4]);g.strokeRect(ox,oy-S,S,S);g.setLineDash([]);g.lineWidth=2.5;
+ [[run(true),css('--ac2')],[run(false),css('--ok')]].forEach(([p,c])=>{g.strokeStyle=c;g.beginPath();T(p).forEach((q,i)=>i?g.lineTo(...q):g.moveTo(...q));g.stroke()})}
+tick('sl','%',odo);tick('sc','%',odo);odo();
+
+const trail=[];
+async function poll(){if(!$('live').checked){setTimeout(poll,500);return}
+ try{const s=await (await fetch('/api/state')).json(),m=s.arm_measured||s.arm;
+  ['a2','a3','a4'].forEach((id,i)=>{$(id).value=m[i+1];$(id+'v').textContent=m[i+1]+'°'});drawArm();
+  const p=s.pose;trail.push([p[0],p[1]]);if(trail.length>600)trail.shift();
+  $('liveout').textContent='серво: '+m.join(', ')+' · поза базы: x='+p[0].toFixed(3)+' м, y='+p[1].toFixed(3)+' м, ψ='+(p[2]/D).toFixed(1)+'° · TCP: '+s.tcp.join(', ')+' · батарея '+(s.battery.volts||0).toFixed(2)+' В';
+  const [g,W,H]=cv('trail');g.strokeStyle='#888';g.beginPath();g.moveTo(0,H/2);g.lineTo(W,H/2);g.moveTo(W/2,0);g.lineTo(W/2,H);g.stroke();
+  const sc=Math.max(1,Math.min(W,H)/2/Math.max(0.3,...trail.map(q=>Math.max(Math.abs(q[0]),Math.abs(q[1])))))*0.8;
+  g.strokeStyle=css('--ac');g.lineWidth=2;g.beginPath();trail.forEach(([x,y],i)=>{const X=W/2+y*-sc,Y=H/2-x*sc;i?g.lineTo(X,Y):g.moveTo(X,Y)});g.stroke();
+  g.fillStyle=css('--ac2');g.beginPath();g.arc(W/2-p[1]*sc,H/2-p[0]*sc,5,0,7);g.fill();
+ }catch(e){$('liveout').textContent='нет связи с роботом (откройте страницу с робота: http://192.168.0.177:8090)'}
+ setTimeout(poll,200)}
+poll();
+addEventListener('resize',()=>{drawArm();drawProf();mec();odo()});
+</script></body></html>

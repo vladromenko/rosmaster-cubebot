@@ -1,0 +1,12 @@
+[Unit]
+Description=CubeBot: find the yellow cube, put it in the box, take it out (manual start only)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/CubeBot
+ExecStart=%h/CubeBot/scripts/run.sh
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=no
+# Explorer's control and watchdog must be back whatever happened.
+ExecStopPost=/bin/systemctl --user start explorer-control.service explorer-watchdog.service

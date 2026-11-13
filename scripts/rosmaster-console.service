@@ -1,0 +1,11 @@
+[Unit]
+Description=Rosmaster web console (manual start only; pauses Explorer control/watchdog while running)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/CubeBot
+ExecStart=%h/CubeBot/scripts/console.sh
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=no
+ExecStopPost=/bin/systemctl --user start explorer-control.service explorer-watchdog.service

@@ -1,0 +1,11 @@
+{
+  "sign": [1, -1, -1, -1, 1],
+  "scale": [1.0, 1.0, 1.0, 1.0, 1.0],
+  "relative": false,
+  "relative_gripper": false,
+  "neutral": [-4.4, 2.0, -83.5, -1.5, 2.2],
+  "max_deg_s": 35,
+  "timeout_s": 0.5,
+  "smoothing": 0.35,
+  "_note": "2026-11-13 Explorer: measured Leader-upright pose = neutral (servo 90); elbow/wrist directions fixed; absolute 1:1 so the arm first moves to the Leader pose. Gripper inverted by the Homebrain sender. Backup in ~/CubeBot-backups/mirror-*"
+}

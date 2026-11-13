@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Эксперименты Rosmaster</title>
+<style>
+:root{--bg:#0e1116;--panel:#171c24;--line:#262d38;--text:#e6e9ee;--dim:#8a94a3;--ok:#3ecf8e;--warn:#f5b942;--bad:#ff5d5d;--acc:#5aa2ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
+.top{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.top .pill{padding:3px 10px;border-radius:999px;background:#222a36;font-size:12px}
+button{background:#222a36;color:var(--text);border:1px solid var(--line);padding:7px 11px;border-radius:8px;cursor:pointer;font-size:13px}
+button:hover{border-color:var(--acc)}button.on{border-color:var(--acc);background:#1b2a40}
+button.go{background:var(--ok);border-color:var(--ok);color:#06210f;font-weight:700}
+button.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
+input,select{background:#10141a;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
+input[type=text]{min-width:240px}
+main{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px;padding:12px;max-width:1600px;margin:0 auto}
+@media(max-width:1000px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.card h2{margin:0 0 8px;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;font-weight:600}
+#video,#map{width:100%;background:#000;border-radius:8px;display:block}#video{aspect-ratio:4/3}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-variant-numeric:tabular-nums}.kv span:nth-child(odd){color:var(--dim)}
+table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}th{color:var(--dim);font-weight:600}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+#log{height:170px;overflow:auto;font:12px/1.35 ui-monospace,Menlo,monospace;color:#b8c0cc;white-space:pre-wrap}
+.help{font-size:12.5px;color:var(--dim)}.help b{color:var(--text)}
+.step{display:inline-block;padding:2px 8px;border-radius:999px;background:#222a36;margin:2px;font-size:12px}.step.y{background:#1f3a2c;color:var(--ok)}.step.n{background:#3a1f1f;color:var(--bad)}
+.banner{padding:8px 12px;margin:0;background:#3a1f1f;color:#ffb3b3;display:none}
+</style></head><body>
+<div class="banner" id="err"></div>
+<div class="top">
+ <b>Эксперименты</b>
+ <button data-e="e1_follow" class="on">1 Следование</button><button data-e="e2_gesture">2 Жесты</button><button data-e="e3_nav">3 Карта и навигация</button>
+ <button data-e="e4_retrieve">4 Найти и принести</button><button data-e="e5_assistant">5 Помощник</button>
+ <span style="flex:1"></span><span class="pill" id="run">не запущено</span><span class="pill" id="perc">зрение: —</span><button class="stop" onclick="send({action:'stop'})">STOP</button>
+</div>
+<main>
+<section>
+ <div class="card"><img id="video" src="/video" alt="камера"></div>
+ <div class="card"><h2>Состояние эксперимента</h2><div id="status"></div></div>
+ <div class="card" id="mapcard" style="display:none"><h2>Карта (slam_toolbox) · красная точка — робот · синяя линия — траектория · зелёные — точки</h2><img id="map" alt="карта"><div class="help" id="wps"></div></div>
+ <div class="card"><h2>Журнал</h2><div id="log"></div></div>
+</section>
+<section>
+ <div class="card" id="panel"></div>
+ <div class="card"><h2>Результаты физических испытаний (из файла results/…)</h2><div id="results" class="help">—</div></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let ws,S=null,cur='e1_follow',resCache={},resT=0;
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function start(key,params){send({action:'exp_start',key,params:params||{}})}
+function stopExp(){send({action:'exp_stop'})}
+function cmd(key,c,args){send({action:'exp_cmd',key,cmd:c,args:args||{}})}
+function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+ ws.onclose=()=>setTimeout(connect,1000);ws.onmessage=e=>{S=JSON.parse(e.data);render()}}
+document.querySelectorAll('.top button[data-e]').forEach(b=>b.onclick=()=>{cur=b.dataset.e;document.querySelectorAll('.top button[data-e]').forEach(x=>x.classList.toggle('on',x===b));buildPanel();loadResults(true)});
+const fmt=(v,d=2)=>v==null?'—':(typeof v==='number'?v.toFixed(d):v);
+const val=id=>{const e=$(id);return e?(e.type==='checkbox'?e.checked:e.value):null};
+// ------------------------------------------------------------------ panels
+const PANELS={
+e1_follow:()=>`<h2>1. Следование за человеком</h2>
+<div class="help">Встаньте перед роботом на 1–3 м: цель захватывается автоматически (по центру кадра). Робот не может держать дистанцию, если человек идёт быстрее его «макс. скорости» (для обычного медленного шага нужно ≥0.4 м/с; для первого теста идите медленно). Робот держит дистанцию, поворачивает и ходит боком (меканум), объезжает препятствия по лидару, останавливается вместе с вами, ищет потерянную цель ≤12 с и не переключается на другого человека (цвет одежды + положение).</div>
+<div class="row"><label>Дистанция, м <input id="e1d" type="number" step="0.1" value="1.2" style="width:70px"></label>
+<label>Макс. скорость, м/с <input id="e1v" type="number" step="0.05" min="0.1" max="0.8" value="0.40" style="width:70px"></label>
+<button class="go" onclick="start('e1_follow',{standoff_m:+val('e1d'),cfg:{follow:{max_vx:+val('e1v')}}})">Запустить</button><button onclick="stopExp()">Остановить</button>
+<button onclick="cmd('e1_follow','lock')">Захватить заново</button></div>
+<h2 style="margin-top:12px">Испытание (запись метрик)</h2>
+<div class="row"><select id="e1t"><option value="straight">1 · человек идёт прямо 3–5 м</option><option value="turn90">2 · поворот на 90°</option><option value="stop">3 · человек останавливается</option><option value="occlusion">4 · проходит за препятствием</option><option value="two_people">5 · два человека в кадре</option></select>
+<button onclick="cmd('e1_follow','trial_start',{type:val('e1t')})">Начать испытание</button></div>
+<div class="row"><label>Рулеткой, м <input id="e1m" type="number" step="0.01" style="width:80px"></label>
+<label>Цель верная? <select id="e1c"><option value="">?</option><option value="true">да</option><option value="false">нет</option></select></label>
+<label>Итог <select id="e1v"><option value="success">успех</option><option value="fail">провал</option></select></label>
+<input id="e1n" type="text" placeholder="заметка" style="min-width:160px"><button onclick="cmd('e1_follow','trial_end',{measured_distance_m:+val('e1m')||null,correct_target:val('e1c')===''?null:val('e1c')==='true',verdict:val('e1v'),note:val('e1n')});loadResults(true)">Завершить и записать</button></div>`,
+e2_gesture:()=>`<h2>2. Управление жестами</h2>
+<div class="help"><b>Ладонь</b> (держать 0.7 с) — стоп · <b>«ко мне»</b> — поманить пальцами (2 цикла) · <b>«от меня»</b> — толкнуть ладонью к роботу · <b>указать влево/вправо</b> (указательным, вдоль кадра) — поворот 45° · <b>большой палец вверх</b> — продолжить следование. Одна команда на жест: пока жест удерживается, повтора нет; пауза 1.5 с после команды.</div>
+<div class="row"><label><input type="checkbox" id="e2x" checked> исполнять команды (движение)</label><label><input type="checkbox" id="e2f" checked> следование включено</label>
+<button class="go" onclick="start('e2_gesture',{execute:val('e2x'),follow:val('e2f')})">Запустить</button><button onclick="stopExp()">Остановить</button></div>
+<h2 style="margin-top:12px">Тестовая попытка</h2>
+<div class="row"><select id="e2g"><option value="stop">ладонь — стоп</option><option value="come">«ко мне»</option><option value="away">«от меня»</option><option value="left">влево</option><option value="right">вправо</option><option value="resume">продолжить</option></select>
+<label>расстояние, м <input id="e2d" type="number" step="0.5" value="1.5" style="width:70px"></label>
+<select id="e2b"><option>фон: светлая стена</option><option>фон: тёмный</option><option>фон: пёстрый</option></select>
+<select id="e2l"><option>свет: дневной</option><option>свет: лампа</option><option>свет: тусклый</option><option>свет: контровой</option></select>
+<button onclick="cmd('e2_gesture','trial_start',{expect:val('e2g'),distance_m:+val('e2d'),background:val('e2b'),light:val('e2l')})">Ждать жест (7 с)</button></div>
+<div class="help">Робот измеряет реальное движение по одометрии: «ко мне» — вперёд ≥8 см, «от меня» — назад ≥8 см, влево/вправо — поворот ≥22°, стоп — без движения и следование выключено. Верно считается только когда и жест, и движение совпали.</div>`,
+e3_nav:()=>`<h2>3. Карта, исследование, навигация (slam_toolbox + Nav2)</h2>
+<div class="help">Поставьте робота в начальную точку. «Построить карту» запускает SLAM и Nav2, записывает точку home и сама едет к границам неизвестного, потом сохраняет карту. Точки P1–P3 запоминаются <b>там, где робот стоит</b> (перевезите/подведите его вручную и нажмите). Маршрут P1→P2→P3→home выполняется без ручного управления.</div>
+<div class="row"><label>бюджет, с <input id="e3b" type="number" value="600" style="width:80px"></label><button class="go" onclick="start('e3_nav',{mode:'explore',budget_s:+val('e3b')})">Построить карту (исследование)</button><button onclick="stopExp()">Остановить</button></div>
+<div class="row"><button onclick="cmd('e3_nav','waypoint',{name:'P1'})">Запомнить P1</button><button onclick="cmd('e3_nav','waypoint',{name:'P2'})">Запомнить P2</button><button onclick="cmd('e3_nav','waypoint',{name:'P3'})">Запомнить P3</button><button onclick="cmd('e3_nav','waypoint',{name:'drop'})">Запомнить «drop» (для эксп. 4)</button></div>
+<div class="row"><label><input type="checkbox" id="e3o"> на пути поставлено новое препятствие</label><button class="go" onclick="start('e3_nav',{mode:'tour',new_obstacle:val('e3o'),label:val('e3o')?'with_obstacle':'baseline'})">Маршрут P1→P2→P3→домой</button><button onclick="start('e3_nav',{mode:'home'})">Вернуться домой</button></div>
+<div class="row"><button onclick="cmd('e3_nav','save_map')">Сохранить карту</button><button onclick="send({action:'exp_nav_stop'})">Выключить SLAM/Nav2</button></div>`,
+e4_retrieve:()=>`<h2>4. Найти и принести предмет</h2>
+<div class="help">Кубик — отработанный конвейер (поиск, подъезд, IK-захват, проверка удержания). Другие предметы (бутылка, чашка, мяч…) ищет детектор COCO; они берутся только если помещаются между раскрытыми губками (≈ 9 см) — иначе будет явный отказ «недоступен для захвата». Доставка: в точку <b>drop</b> на карте (Nav2), если навигация запущена, иначе — в стартовую позу по одометрии. Результат — только если камера видит предмет на полу в точке доставки.</div>
+<div class="row"><input id="e4t" type="text" value="найди кубик" ><select onchange="$('e4t').value=this.value"><option value="найди кубик">кубик</option><option value="найди бутылку">бутылка</option><option value="найди чашку">чашка</option><option value="найди мяч">мяч</option></select>
+<input id="e4n" type="text" placeholder="где лежит предмет (для журнала)" style="min-width:200px"></div>
+<div class="row"><button class="go" onclick="start('e4_retrieve',{target:val('e4t'),note:val('e4n')})">Запустить</button><button onclick="stopExp()">Остановить</button></div>`,
+e5_assistant:()=>`<h2>5. Интерактивный помощник</h2>
+<div class="help">Команда текстом или голосом (распознавание речи в браузере Mac, ru-RU; на роботе микрофона для STT нет). Сценарий: запомнить человека → найти предмет → захватить → найти человека по цвету одежды → подъехать → увидеть протянутую руку → проверить IK-досягаемость → предъявить предмет → <b>разжать захват только после физического подтверждения</b> (рывок сервоприводов + рука у захвата) → проверить, что предмет в руке. Если рука вне досягаемости манипулятора — результат «недостижимо» (функция не завершена).</div>
+<div class="row"><input id="e5t" type="text" value="Найди кубик, принеси его мне и отдай в руку" style="min-width:320px"><button id="mic" onclick="listen()">🎤 голос</button></div>
+<div class="row"><input id="e5n" type="text" placeholder="заметка: где человек и предмет" style="min-width:300px"><button class="go" onclick="start('e5_assistant',{text:val('e5t'),note:val('e5n')})">Выполнить</button><button onclick="stopExp()">Остановить</button></div>
+<div id="e5steps"></div>`};
+function buildPanel(){$('panel').innerHTML=PANELS[cur]();$('mapcard').style.display=cur==='e3_nav'?'':'none';render()}
+function listen(){const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R){alert('Распознавание речи недоступно в этом браузере: введите команду текстом.');return}
+ const r=new R();r.lang='ru-RU';r.interimResults=false;$('mic').textContent='🎤 слушаю…';
+ r.onresult=e=>{$('e5t').value=e.results[0][0].transcript};r.onend=()=>$('mic').textContent='🎤 голос';r.onerror=e=>{$('mic').textContent='🎤 голос'};r.start()}
+// ------------------------------------------------------------------ live render
+function render(){if(!S)return;const x=S.exp,e=x.exps[cur];
+ $('run').textContent=x.active?('идёт: '+x.exps[x.active].title):'не запущено';$('run').style.background=x.active?'#1f3a2c':'#222a36';
+ $('perc').textContent='зрение: '+x.perception.hz+' кадр/с'+(x.perception.error?' · ошибка':'');
+ const b=$('err');b.style.display=(x.error||x.perception.error)?'block':'none';b.textContent=x.error||('зрение: '+x.perception.error);
+ const m=e.metrics||{};let h='<div class="kv"><span>состояние</span><span><b class="'+(e.state==='failed'?'bad':e.state==='done'?'ok':'')+'">'+e.state+'</b>'+(e.running?' · '+(e.elapsed||0)+' с':'')+'</span><span>сообщение</span><span>'+(e.message||'—')+'</span><span>итог</span><span>'+(e.result||'—')+'</span>';
+ if(cur==='e1_follow')h+=kv({'следование':m.state,'заметка':m.note,'дистанция, м':fmt(m.dist),'азимут, °':fmt(m.bearing_deg,1),'монокуляр':m.mono,'команда vx,vy,wz':(m.cmd||[]).join(', '),'потери цели':m.losses,'повторные захваты':m.reacquired,'отклонено чужих':m.rejected,'id цели':m.target_id,'людей в кадре':m.people,'испытание':m.trial||'—','зрение, кадр/с':m.fps});
+ if(cur==='e2_gesture'){const hd=m.hand||{};h+=kv({'рука в кадре':hd.kind||'нет','curl / масштаб':(hd.curl||'—')+' / '+(hd.scale||'—'),'рост / циклы':(hd.growth||'—')+' / '+(hd.cycles||0),'последний жест':m.last?m.last.gesture+' (dx '+m.last.dx+' м, dψ '+m.last.dyaw_deg+'°)':'—','следование':m.follow,'исполнение':m.execute,'попытка':m.trial?('ждём «'+m.trial.expect+'» ещё '+m.trial.left+' с'):'—','верных / всего':(m.ok||0)+' / '+(m.total||0)+(m.rate!=null?' = '+m.rate+' %':''),'ложные события':(m.false_events||0)+' (опасных, с движением: '+(m.dangerous_false||0)+')'});}
+ if(cur==='e3_nav')h+=kv({'цели':m.goals,'неудачи':m.failures,'границ найдено':m.frontiers,'клеток карты':m.explored_cells,'последняя цель':m.last?(m.last.status+' ошибка '+m.last.err_xy_m+' м'):'—'});
+ if(cur==='e4_retrieve'){const st=m.stages;h+=kv({'стадия':m.state||'—','найден':st?yn(st.detected):'—','подъехал':st?yn(st.reached):'—','схвачен':st?yn(st.grasped):'—','доставлен (камерой)':st?yn(st.delivered):'—'});}
+ if(cur==='e5_assistant'){h+=kv({'шаг':m.step||'—'});}
+ h+='</div>';if(cur==='e5_assistant'&&m.steps){const names={command:'команда',requester:'запомнил человека',found_object:'нашёл предмет',grasped:'схватил',found_person:'нашёл человека',approached:'подъехал',hand_seen:'увидел руку',reachable:'рука достижима (IK)',pulled:'человек взял',handed_over:'передача подтверждена'};
+  h+='<div style="margin-top:8px">'+Object.keys(names).map(k=>'<span class="step '+(k in m.steps?(m.steps[k]?'y':'n'):'')+'">'+names[k]+'</span>').join('')+'</div>';if(m.evidence&&m.evidence.reachable)h+='<div class="help">IK: '+(m.evidence.reachable.why||'')+'</div>'}
+ $('status').innerHTML=h;
+ const L=$('log'),atEnd=L.scrollTop+L.clientHeight>=L.scrollHeight-8;L.textContent=S.log.join('\n');if(atEnd)L.scrollTop=L.scrollHeight;
+ if(cur==='e3_nav'){const w=x.nav.waypoints||{};$('wps').textContent='точки: '+(Object.keys(w).map(k=>k+' ('+w[k].x+', '+w[k].y+')').join(' · ')||'нет')+(x.nav.running?' · SLAM/Nav2 работают':' · навигация выключена')}
+ if(Date.now()-resT>2500){resT=Date.now();loadResults(false);if(cur==='e3_nav')$('map').src='/api/exp/map.png?'+Date.now()}}
+const yn=v=>v?'<b class="ok">да</b>':'<b class="dim">нет</b>';
+function kv(o){return Object.entries(o).map(([k,v])=>'<span>'+k+'</span><span>'+(v==null?'—':v)+'</span>').join('')}
+// ------------------------------------------------------------------ results tables
+async function loadResults(force){try{const rows=await (await fetch('/api/exp/results/'+cur)).json();resCache[cur]=rows;showResults(rows)}catch(e){$('results').textContent='нет данных'}}
+function showResults(rows){const el=$('results');if(!rows.length){el.textContent='Пока нет записей.';return}
+ let h='';const pct=(a,b)=>b?Math.round(100*a/b)+' %':'—';
+ if(cur==='e1_follow'){const by={};rows.forEach(r=>{const o=by[r.type]=by[r.type]||{n:0,ok:0,loss:0};o.n++;if(r.operator_verdict==='success')o.ok++;o.loss+=r.target_losses||0});
+  h+='<table><tr><th>испытание</th><th>всего</th><th>успех</th><th>потерь цели</th></tr>'+Object.entries(by).map(([k,o])=>`<tr><td>${k}</td><td>${o.n}</td><td>${o.ok}</td><td>${o.loss}</td></tr>`).join('')+'</table><br>';
+  h+='<table><tr><th>тип</th><th>c</th><th>дист ср/мин/макс</th><th>rms</th><th>±0.35 м</th><th>потери</th><th>реакв.</th><th>рулетка/оценка</th><th>цель верна</th><th>авто</th><th>оператор</th></tr>'+rows.slice().reverse().slice(0,25).map(r=>`<tr><td>${r.type}</td><td>${r.seconds}</td><td>${r.dist_mean}/${r.dist_min}/${r.dist_max}</td><td>${r.dist_rms_error}</td><td>${r.within_035}</td><td>${r.target_losses}</td><td>${r.reacquired}</td><td>${r.measured_distance_m||'—'}/${r.estimated_distance_end||'—'}</td><td>${r.correct_target==null?'?':r.correct_target?'да':'нет'}</td><td class="${r.auto_pass?'ok':'bad'}">${r.auto_pass?'ok':'нет'}</td><td>${r.operator_verdict||'—'}</td></tr>`).join('')+'</table>'}
+ if(cur==='e2_gesture'){const t=rows.filter(r=>r.kind==='trial'),un=rows.filter(r=>r.kind==='unarmed_event');const g=['stop','come','away','left','right','resume'];
+  h+='<table><tr><th>жест</th><th>попыток</th><th>верно</th><th>%</th></tr>'+g.map(k=>{const a=t.filter(r=>r.expect===k);const o=a.filter(r=>r.correct).length;return `<tr><td>${k}</td><td>${a.length}</td><td>${o}</td><td>${pct(o,a.length)}</td></tr>`}).join('')+`<tr><td><b>всего</b></td><td>${t.length}</td><td>${t.filter(r=>r.correct).length}</td><td><b>${pct(t.filter(r=>r.correct).length,t.length)}</b></td></tr></table><div class="help">Критерий ≥ 90 %. Ложные события вне попыток: ${un.length}, из них с движением: ${un.filter(r=>['come','away','left','right'].includes(r.gesture)&&r.executed).length}.</div><br>`;
+  h+='<table><tr><th>ждали</th><th>получили</th><th>движение</th><th>верно</th><th>дист</th><th>фон / свет</th></tr>'+t.slice().reverse().slice(0,30).map(r=>`<tr><td>${r.expect}</td><td>${r.got||'нет реакции'}</td><td>${r.motion_ok==null?'—':r.motion_ok?'да':'нет'} (dx ${r.dx??'—'}, dψ ${r.dyaw_deg??'—'})</td><td class="${r.correct?'ok':'bad'}">${r.correct?'да':'нет'}</td><td>${r.distance_m??''}</td><td>${r.background||''} ${r.light||''}</td></tr>`).join('')+'</table>'}
+ if(cur==='e3_nav'){const tours=rows.filter(r=>r.kind==='tour'),ex=rows.filter(r=>r.kind==='explore');
+  h+='<b>Исследования</b><table><tr><th>время</th><th>с</th><th>цели/неудачи</th><th>площадь, м²</th><th>путь, м</th><th>карта</th></tr>'+ex.slice().reverse().map(r=>`<tr><td>${r.time}</td><td>${r.seconds}</td><td>${r.goals}/${r.failures}</td><td>${r.known_area_m2}</td><td>${r.path_m}</td><td>${r.map||'—'}</td></tr>`).join('')+'</table><br><b>Маршруты</b><table><tr><th>время</th><th>метка</th><th>итог</th><th>точки (статус · ошибка м/° · перепл. · восст.)</th><th>путь, м</th></tr>'+tours.slice().reverse().map(r=>`<tr><td>${r.time}</td><td>${r.label}${r.new_obstacle?' +препятствие':''}</td><td class="${r.ok?'ok':'bad'}">${r.ok?'успех':'не завершён'}</td><td>${r.results.map(p=>`${p.label}: ${p.status} · ${p.err_xy_m??'—'}/${p.err_yaw_deg??'—'} · ${p.replans} · ${p.recoveries}`).join('<br>')}</td><td>${r.path_m}</td></tr>`).join('')+'</table>'}
+ if(cur==='e4_retrieve'){const t=rows.filter(r=>r.kind==='trial'),by={};t.forEach(r=>{const o=by[r.target]=by[r.target]||{n:0,d:0,r:0,g:0,v:0,ok:0};o.n++;o.d+=r.stages.detected;o.r+=r.stages.reached;o.g+=r.stages.grasped;o.v+=r.stages.delivered;o.ok+=r.ok});
+  h+='<table><tr><th>предмет</th><th>попыток</th><th>найден</th><th>подъехал</th><th>схвачен</th><th>доставлен</th></tr>'+Object.entries(by).map(([k,o])=>`<tr><td>${k}</td><td>${o.n}</td><td>${pct(o.d,o.n)}</td><td>${pct(o.r,o.n)}</td><td>${pct(o.g,o.n)}</td><td>${pct(o.v,o.n)}</td></tr>`).join('')+'</table><br>';
+  h+='<table><tr><th>время</th><th>предмет</th><th>итог</th><th>причина</th><th>с</th><th>заметка</th></tr>'+t.slice().reverse().slice(0,25).map(r=>`<tr><td>${r.time}</td><td>${r.target}</td><td class="${r.ok?'ok':'bad'}">${r.ok?'доставлен':'нет'}</td><td>${r.fail_reason||''}</td><td>${r.seconds}</td><td>${r.object_note||''}</td></tr>`).join('')+'</table>'}
+ if(cur==='e5_assistant'){const t=rows.filter(r=>r.kind==='scenario'),ok=t.filter(r=>r.ok).length;
+  h+=`<div class="help">Сценариев: ${t.length}, полностью успешных (передача подтверждена): <b>${ok}</b></div><table><tr><th>время</th><th>итог</th><th>шаги</th><th>причина / уровень</th><th>заметка</th></tr>`+t.slice().reverse().slice(0,25).map(r=>`<tr><td>${r.time}</td><td class="${r.ok?'ok':'bad'}">${r.ok?'успех':'нет'}</td><td>${Object.entries(r.steps||{}).map(([k,v])=>k+(v?' ✓':' ✗')).join(', ')}</td><td>${r.reason||r.handover_level||''}${r.unfinished?' · НЕ ЗАВЕРШЕНО: '+r.unfinished:''}</td><td>${r.note||''}</td></tr>`).join('')+'</table>'}
+ el.innerHTML=h}
+connect();buildPanel();loadResults(true);
+</script></body></html>

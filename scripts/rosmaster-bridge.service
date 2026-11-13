@@ -1,0 +1,10 @@
+[Unit]
+Description=Rosmaster native-firmware bridge (robotio topics). Replaces explorer-mcu (micro-ROS agent) when the native firmware is installed.
+Conflicts=explorer-mcu.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/CubeBot
+ExecStart=/bin/bash -lc 'source %h/Explorer/bin/env.sh; export PYTHONPATH=%h/CubeBot:$PYTHONPATH; exec python3 -m rosmaster.bridge_ros'
+Restart=on-failure
+RestartSec=2

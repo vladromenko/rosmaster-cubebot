@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "physically_calibrated": false,
+  "origin": "vendor nominal coefficients; measured raw remains independent",
+  "joints": [
+    {
+      "joint": 1,
+      "radians_per_tick": 0.0014279966607226332,
+      "radians_at_raw_zero": -2.855993321445266,
+      "lower": -1.5707963267948966,
+      "upper": 1.5707963267948966,
+      "command_min": 900,
+      "command_max": 3100,
+      "physical_degrees_per_tick": -0.08181818181818182,
+      "physical_degrees_at_raw_zero": 253.63636363636363,
+      "recovery_min": 0,
+      "recovery_max": 0
+    },
+    {
+      "joint": 2,
+      "radians_per_tick": -0.0014279966607226332,
+      "radians_at_raw_zero": 2.855993321445266,
+      "lower": -1.5707963267948966,
+      "upper": 1.5707963267948966,
+      "command_min": 900,
+      "command_max": 3100,
+      "physical_degrees_per_tick": -0.08181818181818182,
+      "physical_degrees_at_raw_zero": 253.63636363636363,
+      "recovery_min": 0,
+      "recovery_max": 0
+    },
+    {
+      "joint": 3,
+      "radians_per_tick": -0.0014279966607226332,
+      "radians_at_raw_zero": 2.855993321445266,
+      "lower": -1.5707963267948966,
+      "upper": 1.5707963267948966,
+      "command_min": 900,
+      "command_max": 3100,
+      "physical_degrees_per_tick": -0.08181818181818182,
+      "physical_degrees_at_raw_zero": 253.63636363636363,
+      "recovery_min": 0,
+      "recovery_max": 0
+    },
+    {
+      "joint": 4,
+      "radians_per_tick": -0.0014279966607226332,
+      "radians_at_raw_zero": 2.855993321445266,
+      "lower": -1.5707963267948966,
+      "upper": 1.5707963267948966,
+      "command_min": 900,
+      "command_max": 3100,
+      "physical_degrees_per_tick": -0.08181818181818182,
+      "physical_degrees_at_raw_zero": 253.63636363636363,
+      "recovery_min": 0,
+      "recovery_max": 0
+    },
+    {
+      "joint": 5,
+      "radians_per_tick": 0.0014193942712002077,
+      "radians_at_raw_zero": -2.1101661498509756,
+      "lower": -1.5707963267948966,
+      "upper": 3.141592653589793,
+      "command_min": 380,
+      "command_max": 3700,
+      "physical_degrees_per_tick": 0.08132530120481928,
+      "physical_degrees_at_raw_zero": -30.903614457831324,
+      "recovery_min": 0,
+      "recovery_max": 0
+    },
+    {
+      "joint": 6,
+      "radians_per_tick": 0.0014279966607226332,
+      "radians_at_raw_zero": -1.28519699465037,
+      "lower": 0.5235987755982988,
+      "upper": 2.9670597283903604,
+      "command_min": 1267,
+      "command_max": 2978,
+      "physical_degrees_per_tick": 0.08181818181818182,
+      "physical_degrees_at_raw_zero": -73.63636363636364,
+      "recovery_min": 0,
+      "recovery_max": 0
+    }
+  ]
+}
